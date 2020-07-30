@@ -1,0 +1,1063 @@
+---
+title: "Técnicas de Classificação"
+author: "Adriano"
+date: "15/12/2018"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+  
+## Análise dos Dados do Naufrágio do Titanic  
+
+  Esse estudo tem por objetivo testar algumas técnicas de classificação supervionada e selecionar aquela que tiver o melhor desempenho segundo uma métrica escolhida, utilizando a base de dados do naufrágio do Titanic.
+   
+### 1. Definindo o problema  
+
+  Segundo a wikipédia, o Titanic era um navio que partiu em sua primeira e única viagem com 1316 passageiros a bordo: 325 na primeira classe, 285 na segunda e 706 na terceira. Deles, 922 embarcaram em Southampton, 274 em Cherbourg-Octeville na França e 120 em Queenstown na Irlanda. A lista da Primeira Classe do Titanic era uma lista de pessoas ricas e proeminentes da alta classe em 1912. Os passageiros da segunda classe eram turistas à lazer, acadêmicos, membros do clero e famílias inglesas e americanas de classe média e os da terceira classe partiram esperando começar vida nova nos Estados Unidos e Canadá.
+
+  Na noite de 14 de abril de 1912 por volta de 23:40h, enquanto o Titanic navegava a cerca de 640 quilômetros ao Sul dos Grandes Bancos da Terra Nova, o navio atingiu um iceberg e começou a afundar. O estudo em questão tentará responder às seguintes questões: 
+  
+    O fato de uma pessoa ter sobrevivido ao desastre está relacionado, de alguma forma, 
+    com sua situação sócio-econômica?
+    Caso esteja, poderíamos prever se uma pessoa sobreviveria, 
+    a partir dos dados disponíveis?   
+
+  A métrica utilizada como balizador para aferir a qualidade do modelo será a **sensibilidade** (ou **RECALL**), pois teremos como objetivo minimizar os falsos negativos, dado que o modelo tentará determinar quem sobrevive e quem não sobrevive, é melhor apontar alguém como possível sobrevivente de forma incorreta (FALSO POSITIVO) do que apontar um sobrevivente como não sobrevivente (FALSO NEGATIVO).  
+  
+### 2. Conhecendo os dados  
+
+  A base de dados sobre o desastre está disponível no **[Kaggle](https://www.kaggle.com/c/titanic/data)**. Ela está separada entre dados de treinamento e dados de teste. A descrição das colunas encontra-se abaixo.
+
+**Descrição dos dados:**
+
+Variável    | Descrição
+:-------------- | :------------------------------------------------
+PassengerId | Identificador do Passageiro
+Survived | Variável de indicadora de sobrevivência (0 = Não Sobreviveu, 1 = Sobreviveu)
+Pclass | Classe do passageiro
+Name | Nome do passageiro
+Sex | Sexo do passageiro
+Age | Idade do passageiro
+SibSp | Número de irmãos/cônjuge no navio
+Parch | Número de pais e filhos no navio
+Ticket | Número da passagem
+Fare | Preço da passagem
+Cabin | Código da cabine
+Embarked | Porto de embarque
+
+  
+### 3. Preparando os dados  
+
+  Carregando as bibliotecas necessárias. Será necessário carregar a biblioteca **tidyverse** que possui as ferramentas necessária para a preparação do dados, mas a **titanic** que possui o *data set* e a **ModelMetrics** que possui métricas para avaliação de modelos.
+
+```{r message=FALSE, warning=FALSE}
+
+# instalando os pacotes que serão usados
+
+# Pacote com funções de tratamento de dados
+library(tidyverse)
+
+# Pacote com os dados de análise
+library(titanic)
+
+# Pacote com funções de validação de modelo
+library(ModelMetrics)
+
+```
+
+
+  Carregando o *data set* necessário para trabalhar. Serão dois *data set*, um para treino do modelo e outro para prova do modelo.
+
+```{r}
+
+data("titanic_train")
+data("titanic_test")
+
+print("DataSet de Treino")
+str(titanic_train)
+
+print("DataSet de Prova")
+str(titanic_test)
+
+```
+
+
+  Trabalhando no *data set* de treino, modificando o tipo de dado das colunas **Sex** e **Embarked**, passando elas para do tipo *factor*. Retirando as colunas **PassengerId**, **Ticket** e **Cabin** pois não serão utilizadas pelo modelo, pois não explicariam a pergunta do problema.
+
+
+```{r}
+
+# Preparando dataset de treino
+# ----------------------------
+dados <- titanic_train
+# Transformando em fator os atributos texto de interesse
+dados <- dados %>% mutate(fSex = factor(Sex, levels = c('male','female')), fEmbarked = factor(Embarked, levels = c('S','C','Q')))
+
+# Retirando o Sex(5) e Embarked(12) por estarem duplicadas
+# A coluna PassengerId(1) porque nao tem significado
+# Mais o ticket(9) e a cabine(11) por serem irrelevantes para a pesquisa
+dados <- dados[,c(-1,-5,-9,-11,-12)]
+str(dados)
+
+```
+
+  Verificando a existência de dados **N/A**. Como pode-se notar a coluna **Age** possui muitos valores **N/A** e enquanto que a coluna **fEmbarked** possui apenas 2.
+
+```{r}
+
+# Verificando quais colunas existe conteudo N/A, se uma coluna tiver um N/A ela será excluída do dataset
+v_na <- apply(dados, 2, is.na)
+t_na <- apply(v_na, 2, sum)
+print("Total de Valores N/A por coluna")
+t_na
+
+```
+
+  Como a coluna **fEmbarked** possui apenas 2 valores **N/A**, optou-se por excluir essas linhas.
+
+```{r}
+
+# Como fEmbarked(9) soh possui dois elementos com N/A, optou-se por manter a coluna excluindo as linhas com problema
+lin <- which(v_na[,9])
+dados[lin,]
+lin <- -1 * lin
+dados <- dados[lin,]
+
+```
+
+  Devido a grande quantidade de valores **N/A** na coluna **Age**, optou-se por excluir a coluna inteira.
+
+```{r}
+
+# Retirando Age por ter excesso de valor N/A
+dados <- subset(dados, select = -Age)
+treino <- dados
+str(treino)
+
+```
+
+  Ajustando os nomes das colunas do *data set* de treino.
+
+```{r}
+
+# Renomeando as colunas do data frame
+colnames(treino) <- c('Sobreviveu','Classe','Nome','HFamilia','VFamilia','Preco','Sexo','Embarque')
+str(treino)
+
+```
+
+  Repetindo o mesmo processo para o *data set* de prova.
+
+```{r}
+
+# Preparando o dataset de teste
+# -----------------------------
+dados <- titanic_test
+# Transformando em fator os atributos texto de interesse
+dados <- dados %>% mutate(fSex = factor(Sex, levels = c('male','female')), fEmbarked = factor(Embarked, levels = c('S','C','Q')))
+
+# Retirando o Sex(4) e Embarked(11) por estarem duplicadas
+# A coluna PassengerId(1) porque nao tem significado
+# Mais o ticket(8) e a cabine(10) por serem irrelevantes para a pesquisa
+dados <- dados[,c(-1,-4,-8,-10,-11)]
+
+# Verificando quais colunas existe conteudo N/A, se uma coluna tiver um N/A ela será excluída do dataset
+v_na <- apply(dados, 2, is.na)
+t_na <- apply(v_na, 2, sum)
+
+print("Total de Valores N/A por coluna")
+t_na
+
+# Como Fare possui somente um elemento N/A, iremos retira-lo do dataset
+lin <- which(v_na[,6]) * -1
+dados <- dados[lin,]
+
+# Retirando Age por ter excesso de valor N/A
+dados <- subset(dados, select = -Age)
+prova <- dados
+
+# Renomeando as colunas do data frame
+colnames(prova) <- c('Classe','Nome','HFamilia','VFamilia','Preco','Sexo','Embarque')
+print("DataSet de Prova")
+str(prova)
+
+```
+
+  Dividindo o *data set* de treino em dois, o primeiro para treinar efetivamento o modelo e o segundo para validá-lo na proporção de 80% - 20%.
+  
+  >80% do *data set* para treinar o modelo e 20% do *data set* para validar o modelo.
+  
+```{r}
+
+set.seed(548)
+ind_treino <- sample(x = nrow(treino), size = 0.8*nrow(treino), replace = FALSE)
+
+valida <- treino[-ind_treino,]
+print("DataSet Validação")
+str(valida)
+print(paste("Total da amostra", nrow(valida), sep = " = "))
+
+treino <- treino[ind_treino,]
+print("DataSet Treino")
+str(treino)
+print(paste("Total da amostra", nrow(treino), sep = " = "))
+
+```
+
+  Transformando a coluna *Sobreviveu* em fator para otimizar a aplicação dos modelos de classificação supervisionada.
+  
+```{r}
+
+# Transformando a coluna Sobreviveu em fator para otimizar a aplicação nos modelos.
+treino$Sobreviveu <- as.factor(treino$Sobreviveu)
+valida$Sobreviveu <- as.factor(valida$Sobreviveu)
+str(treino)
+str(valida)
+
+```
+  
+  
+### 4. Modelagem  
+   
+#### 4.1 Regressão Logística  
+
+  Primeira técnica a ser usada para classificar os dados será **Regressão Logística**.
+
+  Primeiro ajuste foi considerando somente as variáveis *Classe*, *Preço* e *Embarque*, pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+
+```{r}
+
+# Ajustando considerando as variáveis Classe, Preço e Embarque 
+fit11 <- glm(Sobreviveu ~ Classe + Preco + Embarque + 1, data = treino, family = binomial())
+summary(fit11)
+
+```
+  
+  No segundo ajuste retirou-se a variável *Embarque* devido ao não atendimento do nível de confiança. Ou seja, existia um probabilidade maior que 95% do coeficiente dessa variável se igual a **zero**.
+  
+```{r}
+
+# Retirou-se a variável Embarque devido ao não atendimento do nível de confiança.
+fit12 <- glm(Sobreviveu ~ Classe + Preco + 1, data = treino, family = binomial())
+summary(fit12)
+
+```
+
+  No terceiro ajuste foi mantido somente a variável *Classe* no modelo.
+
+```{r}
+
+# Foi mantido somente a variável Classe no modelo.
+fit13 <- glm(Sobreviveu ~ Classe + 1, data = treino, family = binomial())
+summary(fit13)
+
+```
+
+  O ajuste escolhido foi o segundo que possui a equação:
+  
+  $$Sobreviveu = Classe + Preco + \beta$$
+
+  Sendo $\beta$ o intercepto.
+  
+  Como o primeiro ajuste possui variáveis que não atendem aos testes estatísticos, a escolha reside entre o segundo ajuste e o terceiro ajuste.
+  Pelo Critério de Informação de Akaike - **AIC**, o valor do segundo ajuste é menor que o terceiro ajuste, portanto possui uma qualidade melhor. Posto isso, a melhor opçao é o segundo ajuste.
+  
+```{r}
+
+print(paste("Segundo Ajuste - AIC: ", AIC(fit12)))
+print(paste("Terceiro Ajuste - AIC: ", AIC(fit13)))
+
+```
+
+  A escolha pelo segundo ajuste também é confirmada comparando a **Raiz do Erro Quadrático Médio** dos três ajustes.
+  
+```{r}
+
+paste("Segundo ajuste - RMSE: ", rmse(fit12))
+paste("Terceiro ajuste - RMSE: ",rmse(fit13))
+
+```
+  
+  **Validando o ajuste escolhido.**  
+  
+  A **Matriz de Confusão** da validação mostra que o modelo é capaz de prever somente cerca de 40% das pessoas que sobreviveram segundo a métrica **Sensibilidade (RECALL)**, considerando o limite de corte com probabilidade de 50%.
+
+```{r}
+
+# Testando o ajuste escolhido
+previsao1 <- predict(fit12, newdata = valida, type = "response")
+valor_corte <- 0.5
+real <- if_else(valida$Sobreviveu == 1, 1, 0)
+previsao <- previsao1
+
+# Utilizando a função do pacote modelMetrics para criar a Matriz de Confusão
+m_conf <- confusionMatrix(real, previsao, cutoff = valor_corte)
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+paste("Limite de corte: ", valor_corte * 100, "%")
+m_conf
+
+# Sensibilidade (Recall) = VP / (VP + FN) - Indica o quanto o modelo gera de VP em comparação com FN, ou seja,
+# mede o quanto o modelo é capaz de identificar todos os casos reais positivos.
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+paste("RECALL: ", round(sensibilidade * 100, digits = 4),'%')
+
+```
+
+  A **Precisão** e **F1 Score** confirmam a baixa capacidade de previsão do modelo.
+  
+```{r}
+
+# Precisão = VP / (VP + FP) - Indica o quanto um modelo gera de VP em relação a FP, ou seja, 
+# quanto menor a Precisao mais ineficiente é um modelo, pois ele gera um alto FP que gera custos sem retorno.
+precisao <- precision(real, previsao, cutoff = valor_corte)
+paste("Precisão: ", round(precisao * 100, digits = 4),'%')
+
+paste('F1 Score: ', round(f1Score(real, previsao, cutoff = valor_corte) * 100, digits = 4), '%')
+```
+  
+  A Área Sob a Curva - **AUC** mede a qualidade de modelo, quanto maior o valor do do **AUC** melhor é o modelo. Esse ajuste de **Regressão Logística** mostra um nível um pouco superior a 50%. Que é o percentual que retrata quando não utilizamos modelo algum, deixando a escolha ao acaso.
+  
+```{r}
+
+# Área sob a curva ROC
+paste("AUC: ", round(auc(valida[,1],previsao) * 100, digits = 4), "%")
+
+```
+
+  O passo seguinte é obter um **Limite de Corte** otimizado que represente a melhor escolha e que pontencialize a métrica **F1 Score**.
+
+```{r}
+
+# >>> Definição da função f1_score <<<
+f1_score <- function(limite) {
+  x <- cbind(real,if_else(previsao > limite, 1, 0))
+  colnames(x) = c('Real', 'Previsto')
+  x <- as.data.frame(x)
+  vp1 <- if_else(x$Real == 1 & x$Previsto == 1, 1, 0)
+  fp1 <- if_else(x$Real == 0 & x$Previsto == 1, 1, 0)
+  fn1 <- if_else(x$Real == 1 & x$Previsto == 0, 1, 0)
+  r <- sum(vp1) / (sum(vp1) + sum(fn1))
+  p <- sum(vp1) / (sum(vp1) + sum(fp1))
+  2 * p * r / (p + r)
+}
+
+opt <- optimize(f1_score, c(0,1), tol = 0.0001, maximum = TRUE)
+paste("Limite de Corte Otimizado: ", opt$maximum)
+paste("Valor Máximo alcançado pela métrica F1 Score: ",opt$objective)
+
+```
+
+  Utilizando o novo **Limite de Corte** otimizado para obter os valores da **Precisão**, **Recall** e **F1 Score**, tem-se as medidas de qualidade para o ajuste utilizando a técnica de **Regressão Logística**.  
+
+```{r}
+
+# Medidas de Precisão e Sensibilidade com o valor de corte otimizado.
+valor_corte <- opt$maximum
+
+precisao <- precision(real, previsao, cutoff = valor_corte)
+paste("Precisão: ", round(precisao * 100, digits = 4),'%')
+
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+paste("RECALL: ", round(sensibilidade * 100, digits = 4),'%')
+
+f1 <- f1Score(real, previsao, cutoff = valor_corte)
+paste('F1 Score: ', round(f1 * 100, digits = 4), '%')
+
+paste('Matriz de Confusão:')
+m_conf2 <- confusionMatrix(real, previsao, cutoff = valor_corte)
+rownames(m_conf2) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf2) <- c('Real Negativo','Real Positivo')
+m_conf2
+
+# Guarda dos dados de validação
+p_rl <- precisao
+r_rl <- sensibilidade
+f1_rl <- f1
+m_rl <- m_conf2
+
+```
+
+    
+#### 4.2 Árvore de Decisão
+
+  A segunda técnica a ser utilizada será **Árvore de Decisão**.
+  
+  Carregando as bibliotecas necessárias para utilizar a técnica. Será necessário a biblioteca **rpart** que possui a função para gerar a árvore de decisão e a **rpart.plot** que possui a função para plotar a árvore em modo gráfico.
+  
+```{r message=FALSE, warning=FALSE}
+
+# Pacote contendo as funções para trabalhar árvore de decisão
+library(rpart)
+library(rpart.plot)
+
+```
+  
+  Primeiro ajuste foi considerando somente as variáveis *Classe*, *Preço* e *Embarque*, pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+  
+```{r}
+
+# Ajustando considerando as variáveis Classe, Preço e Embarque somente, 
+# pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+fit21 <- rpart(Sobreviveu ~ Classe + Preco + Embarque + 1, data = treino)
+
+# Exibição da árvore utilizando o pacote rpart.plot
+par(fg = 'blue', bg = 'gray', font = 2, lwd = 2, xpd = TRUE)
+rpart.plot(fit21, box.palette = c('OrPu'))
+
+```
+
+  No segundo ajuste retirou-se a variável *Embarque*.
+
+```{r}
+
+# Retirou-se a variável Embarque.
+fit22 <- rpart(Sobreviveu ~ Classe + Preco + 1, data = treino)
+
+# Exibição da árvore utilizando o pacote rpart.plot
+par(fg = 'blue', bg = 'gray', font = 2, lwd = 2, xpd = TRUE)
+rpart.plot(fit22, box.palette = c('OrPu'))
+
+```
+
+  No terceiro ajuste foi mantido somente a variável *Classe* no modelo.
+
+```{r}
+
+# Foi mantido somente a variável Classe no modelo.
+fit23 <- rpart(Sobreviveu ~ Classe + 1, data = treino)
+
+# Exibição da árvore utilizando o pacote rpart.plot
+par(fg = 'blue', bg = 'gray', font = 2, lwd = 2, xpd = TRUE)
+rpart.plot(fit23, box.palette = c('OrPu'))
+
+```
+
+  Como a classificação para ambos os ajustes, primeiro e segundo, é basicamente a mesma, optou-se pelo segundo pois ele é mais parcimonioso.
+
+```{r}
+
+summary(fit22)
+
+```
+
+  **Validando o ajuste escolhido.**  
+  
+  A **Matriz de Confusão** da validação mostra que o modelo é capaz de prever somente cerca de 50% das pessoas que sobreviveram segundo a métrica **Sensibilidade (RECALL)**, considerando o limite de corte com probabilidade de 50%.
+  
+```{r}
+
+# Testando o modelo escolhido
+previsao2 <- predict(fit22, newdata = valida)
+previsao <- previsao2[,2]
+real <- if_else(valida$Sobreviveu == 1, 1, 0)
+valor_corte <- 0.5
+
+# Utilizando a função do pacote modelMetrics para criar a Matriz de Confusão
+m_conf <- confusionMatrix(real, previsao, cutoff = valor_corte)
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+paste("Limite de corte: ", valor_corte * 100, "%")
+m_conf
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+paste("RECALL: ", round(sensibilidade * 100, digits = 4),'%')
+
+```
+
+  A **Precisão** e **F1 Score** confirmam a baixa capacidade de previsão do modelo.
+
+```{r}
+
+# Obtendo a precisão do modelo: Precisao = VP / (VP + FP), 
+# que indica se o modelo é capaz de identificar os VP's errando pouco, ou seja, apontando falsos positivos.
+precisao <- precision(real, previsao, valor_corte)
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+
+f1 <- f1Score(real, previsao, cutoff = valor_corte)
+
+paste("Precisão: ", round(precisao * 100, digits = 4),'%')
+paste('F1 Score: ', round(f1 * 100, digits = 4), '%')
+```
+
+  O passo seguinte é obter um **Limite de Corte** otimizado que represente a melhor escolha e que pontencialize a métrica **F1 Score**.
+  
+```{r}
+
+# >>> Usando a função f1_score definida acima
+opt <- optimize(f1_score, c(0,1), tol = 0.0001, maximum = TRUE)
+paste("Limite de Corte Otimizado: ", opt$maximum)
+paste("Valor Máximo alcançado pela métrica F1 Score: ",opt$objective)
+
+```
+
+  Utilizando o novo **Limite de Corte** otimizado para obter os valores da **Precisão**, **Recall** e **F1 Score**, tem-se as medidas de qualidade para o ajuste utilizando a técnica de **Árvore de Decisão**.  
+
+```{r}
+
+# Medidas de Precisão e Sensibilidade com o valor de corte otimizado
+valor_corte <- opt$maximum
+precisao <- precision(real, previsao, cutoff = valor_corte)
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+f1 <- f1Score(real, previsao, cutoff = valor_corte)
+
+paste("Precisão: ", round(precisao * 100, digits = 4),'%')
+paste("RECALL: ", round(sensibilidade * 100, digits = 4),'%')
+paste('F1 Score: ', round(f1 * 100, digits = 4), '%')
+
+real <- if_else(valida$Sobreviveu == 1, 1, 0)
+# Utilizando a função do pacote modelMetrics para criar a Matriz de Confusão
+m_conf2 <- confusionMatrix(real, previsao, cutoff = valor_corte)
+rownames(m_conf2) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf2) <- c('Real Negativo','Real Positivo')
+paste('Matriz de Confusão:')
+m_conf2
+
+```
+
+  Nota-se que não houve uma evolução nos valores das métricas com o novo limite de corte otimizado.   
+  
+  Estabelecendo um limite de corte de **32,0%**, obtem-se um valor para **F1 Score** melhor, pois aparentemente a função *optimize* não convergiu para um máximo global.
+  
+```{r}
+
+# Medidas de Precisão e Sensibilidade com o valor de corte arbitrado de 0,32
+valor_corte <- 0.32
+precisao <- precision(real, previsao, cutoff = valor_corte)
+sensibilidade <- recall(real, previsao, cutoff = valor_corte)
+f1 <- f1Score(real, previsao, cutoff = valor_corte)
+
+paste("Precisão: ", round(precisao * 100, digits = 4),'%')
+paste("RECALL: ", round(sensibilidade * 100, digits = 4),'%')
+paste('F1 Score: ', round(f1 * 100, digits = 4), '%')
+
+real <- if_else(valida$Sobreviveu == 1, 1, 0)
+# Utilizando a função do pacote modelMetrics para criar a Matriz de Confusão
+m_conf2 <- confusionMatrix(real, previsao, cutoff = valor_corte)
+rownames(m_conf2) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf2) <- c('Real Negativo','Real Positivo')
+paste('Matriz de Confusão:')
+m_conf2
+
+# Guarda dos dados de validação
+p_ad <- precisao
+r_ad <- sensibilidade
+f1_ad <- f1
+m_ad <- m_conf2
+
+```
+  
+
+#### 4.3 Análise de Discriminante
+
+  A terceira técnica a ser utilizada será **Análise de Discriminante**.  
+  
+  Carregando as bibliotecas necessárias para utilizar a técnica. Será necessário a biblioteca **MASS** que contém a função capaz de gerar a função e as bilbiotecas **heplots** que contém o teste *Box-M*, para verificar a semelhança da matriz de variância-covariância entre os grupos e **rrcov** que contém o teste de *Lambda de Wilks*.
+  
+```{r message=FALSE, warning=FALSE}
+
+# Pacote contendo funções para trabalhar Análise de Discriminante  
+library(MASS)
+
+# Pacote que possui o teste Box-M para verificar homogeneidade de variância 
+# e cálculo da distâcia de Mahalanobis
+library(heplots)
+
+# Pacote que possui o teste Lambda de Wilks
+library(rrcov)
+
+```
+
+  Primeiro ajuste foi considerando somente as variáveis *Classe*, *Preço* e *Embarque*, pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+
+```{r}
+
+# Ajustando considerando as variáveis Classe, Preço e Embarque somente, 
+# pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros. 
+fit31 <- lda(Sobreviveu ~ Classe + Preco + Embarque + 1, treino)
+fit31
+
+```
+
+  Analisando se o modelo atende a um dos pressupostos da técnica de **Análise de Discriminante** que é homogeneidade da matriz de variância-covariância, aplicamos o teste de *Box-M* que estabelece como hipótese nula a homogeneidade dessa matriz.
+  
+```{r}
+
+# Teste de Box M para verificar a igualdade das matrizes de variância e covariância entre os grupos.
+# H_0: As matrizes de variância e covariância são homogêneas (iguais).
+# *** O RESULTADO GERADO POR ESSA FUNÇÃO PRECISA SER VALIDADO ***
+treino_exp <- treino %>% mutate(Num_Embarque = if_else(treino$Embarque == 'S', 1, if_else(treino$Embarque == 'C', 2, 3)))
+
+t_BoxM <- boxM(treino_exp[,c(2,6,9)], treino_exp[,1])
+t_BoxM
+paste("p-Valor:", t_BoxM$p.value)
+
+```
+  
+  Verificou-se que o p-Valor é menor que 5%, portanto rejeita-se a hipótese nula que estabelece que as matrizes de variância e covariância são homogêneas. Assim não é possível utilizar o ajuste acima, pois ele não atende ao pressuposto da homogeneidade da matriz de variância-covariância da técnica.  
+
+  No segundo ajuste retirou-se a variável *Embarque*.
+  
+```{r}
+
+# Retirou-se a variável Embarque, pois o primeiro modelo não atende a premissa da técnica
+# que declara que as matrizes de variância e covariância devem ser homogêneas.
+fit32 <- lda(Sobreviveu ~ Classe + Preco + 1, data = treino)
+fit32
+
+```
+
+  Analisando se o modelo atende a um dos pressupostos da técnica de **Análise de Discriminante** que é homogeneidade da matriz de variância-covariância, aplicamos o teste de *Box-M* que estabelece como hipótese nula a homogeneidade dessa matriz.
+
+```{r}
+
+# *** O RESULTADO GERADO POR ESSA FUNÇÃO PRECISA SER VALIDADO ***
+treino_exp <- treino
+
+t_BoxM <- boxM(treino_exp[,c(2,6)], treino_exp[,1])
+t_BoxM
+paste("p-Valor:", t_BoxM$p.value)
+
+```
+
+  Verificou-se que o p-Valor é menor que 5%, portanto rejeita-se a hipótese nula que estabelece que as matrizes de variância e covariância são homogêneas. Assim não é possível utilizar o ajuste acima, pois ele não atende ao pressuposto da homogeneidade da matriz de variância-covariância da técnica.  
+
+  No terceiro ajuste foi mantido somente a variável *Classe* no modelo.
+
+```{r}
+
+# Foi mantido somente a variável Classe no modelo.
+fit33 <- lda(Sobreviveu ~ Classe + 1, data = treino)
+fit33
+
+```
+
+  Como não há como analisar se o modelo atende a um dos pressupostos da técnica de **Análise de Discriminante** que é homogeneidade da matriz de variância-covariância, pois ele possui somente uma variável dependente, foi descartado esse ajuste.  
+  Como o primeiro e segundo ajustes não atenderam a um dos pressupostos da técnica, a **Análise de Discriminante** não será utilizado nessa predição.
+    
+    
+#### 4.4 k-NN (k-Nearest Neightbors)  
+
+  Quarto técnica a ser testado será uma **k-NN (k-Nearest Neighbors)**.
+  
+  Carregando as bibliotecas necessárias para utilizar a técnica. Será necessário a biblioteca **class** que contém a função responsável por implementar a técnica **k-NN**.
+  
+```{r}
+
+# Pacote contendo as funções para trata k-NN
+library(class)
+
+```
+
+  Primeiro ajuste foi considerando somente as variáveis *Classe*, *Preço* e *Embarque*, pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+
+```{r}
+
+# Setando o k para todos os ajustes
+k_vizinho <- 30
+
+# [ ::: Primeiro Ajuste ::: ]
+# Ajustando considerando as variáveis Classe, Preço e Embarque somente, 
+# pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros. 
+matriz_casos <- treino[,c(2,6)]
+matriz_casos <- matriz_casos %>% 
+  mutate(Num_Embarque = if_else(treino$Embarque == 'S', 1, if_else(treino$Embarque == 'C', 2, 3)))
+
+classe_casos <- treino[,1]
+
+matriz_teste <- valida[,c(2,6)]
+matriz_teste <- matriz_teste %>% 
+  mutate(Num_Embarque = if_else(valida$Embarque == 'S', 1, if_else(valida$Embarque == 'C', 2, 3)))
+
+fit41 <- knn(matriz_casos, matriz_teste, classe_casos, k = k_vizinho, prob = TRUE)
+fit41
+
+```
+
+  Analisando o primeiro ajuste utilizando a matriz de confusão e a métrica F1 Score como medida de qualidade do ajuste, verificamos que o nível de predição não chega a 50%.
+  
+```{r}
+
+# Criando a Matriz de Confusão manualmente
+prev <- fit41
+prev <- as.factor(prev)
+vp <- if_else(valida$Sobreviveu == 1 & prev == 1, 1, 0)  
+fn <- if_else(valida$Sobreviveu == 1 & prev == 0, 1, 0)
+fp <- if_else(valida$Sobreviveu == 0 & prev == 1, 1, 0)
+vn <- if_else(valida$Sobreviveu == 0 & prev == 0, 1, 0)
+m_conf <- rbind(cbind(sum(vn),sum(fn)),cbind(sum(fp),sum(vp)))
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+matriz_confusao_1 <- m_conf
+
+# Obtendo a precisão do modelo: Precisao = VP / (VP + FP), 
+# que indica se o modelo é capaz de identificar os VP's errando pouco, ou seja, apontando falsos positivos.
+prc1 <- sum(vp) / (sum(vp) + sum(fp))
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+rec1 <- sum(vp) / (sum(vp) + sum(fn))
+
+# Obtendo a medida F1 Score
+f1score1 <- 2 * prc1 * rec1 / (prc1 + rec1)
+
+paste("F1 Score:", round(f1score1*100, digits = 6), "%")
+matriz_confusao_1
+
+```
+  
+  No segundo ajuste retirou-se a variável *Embarque*.
+  
+```{r}
+
+# [ ::: Segundo Ajuste ::: ]
+# Retirou-se a variável Embarque.
+matriz_casos <- treino[,c(2,6)]
+classe_casos <- treino[,1]
+
+matriz_teste <- valida[,c(2,6)]
+
+fit42 <- knn(matriz_casos, matriz_teste, classe_casos, k = k_vizinho, prob = TRUE)
+fit42
+
+```
+  
+  Analisando o segundo ajuste utilizando a matriz de confusão e a métrica F1 Score como medida de qualidade do ajuste, verificamos que o nível de predição também não chega a 50%.
+  
+```{r}
+
+# Criando a Matriz de Confusão manualmente
+prev <- fit42
+prev <- as.factor(prev)
+vp <- if_else(valida$Sobreviveu == 1 & prev == 1, 1, 0)  
+fn <- if_else(valida$Sobreviveu == 1 & prev == 0, 1, 0)
+fp <- if_else(valida$Sobreviveu == 0 & prev == 1, 1, 0)
+vn <- if_else(valida$Sobreviveu == 0 & prev == 0, 1, 0)
+m_conf <- rbind(cbind(sum(vn),sum(fn)),cbind(sum(fp),sum(vp)))
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+matriz_confusao_2 <- m_conf
+
+# Obtendo a precisão do modelo: Precisao = VP / (VP + FP), 
+# que indica se o modelo é capaz de identificar os VP's errando pouco, ou seja, apontando falsos positivos.
+prc2 <- sum(vp) / (sum(vp) + sum(fp))
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+rec2 <- sum(vp) / (sum(vp) + sum(fn))
+
+# Obtendo a medida F1 Score
+f1score2 <- 2 * prc2 * rec2 / (prc2 + rec2)
+
+paste("F1 Score:", round(f1score2*100, digits = 6), "%")
+matriz_confusao_2
+
+```
+  
+  No terceiro ajuste foi mantido somente a variável *Classe* no modelo.
+  
+```{r}
+
+# [ ::: Terceiro Ajuste ::: ]
+# Foi mantido somente a variável Classe no modelo.
+matriz_casos <- treino[,2]
+matriz_casos <- as.data.frame(matriz_casos)
+classe_casos <- treino[,1]
+
+matriz_teste <- valida[,2]
+matriz_teste <- as.data.frame(matriz_teste)
+
+fit43 <- knn(matriz_casos, matriz_teste, classe_casos, k = k_vizinho, prob = TRUE)
+fit43
+
+```
+  
+  Analisando o terceiro ajuste utilizando a matriz de confusão e a métrica F1 Score como medida de qualidade do ajuste, verificamos que o nível de predição também não chega a 50%.
+
+```{r}
+
+# Criando a Matriz de Confusão manualmente
+prev <- fit43
+prev <- as.factor(prev)
+vp <- if_else(valida$Sobreviveu == 1 & prev == 1, 1, 0)  
+fn <- if_else(valida$Sobreviveu == 1 & prev == 0, 1, 0)
+fp <- if_else(valida$Sobreviveu == 0 & prev == 1, 1, 0)
+vn <- if_else(valida$Sobreviveu == 0 & prev == 0, 1, 0)
+m_conf <- rbind(cbind(sum(vn),sum(fn)),cbind(sum(fp),sum(vp)))
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+matriz_confusao_3 <- m_conf
+
+# Obtendo a precisão do modelo: Precisao = VP / (VP + FP), 
+# que indica se o modelo é capaz de identificar os VP's errando pouco, ou seja, apontando falsos positivos.
+prc3 <- sum(vp) / (sum(vp) + sum(fp))
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+rec3 <- sum(vp) / (sum(vp) + sum(fn))
+
+# Obtendo a medida F1 Score
+f1score3 <- 2 * prc3 * rec3 / (prc3 + rec3)
+
+paste("F1 Score:", round(f1score3*100, digits = 6), "%")
+matriz_confusao_3
+
+```
+
+  Utilizando o primeiro ajuste e um número de vizinhos (*k*) ligeiramente maior, igual a 50, tentou-se verificar se haveria uma melhora na predição.
+  
+```{r}
+
+# Setando o k para todos os ajustes
+k_vizinho <- 50
+paste("k =", k_vizinho)
+
+# [ ::: Primeiro Ajuste ::: ]
+# Ajustando considerando as variáveis Classe, Preço e Embarque somente, 
+# pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros. 
+matriz_casos <- treino[,c(2,6)]
+matriz_casos <- matriz_casos %>% 
+  mutate(Num_Embarque = if_else(treino$Embarque == 'S', 1, if_else(treino$Embarque == 'C', 2, 3)))
+
+classe_casos <- treino[,1]
+
+matriz_teste <- valida[,c(2,6)]
+matriz_teste <- matriz_teste %>% 
+  mutate(Num_Embarque = if_else(valida$Embarque == 'S', 1, if_else(valida$Embarque == 'C', 2, 3)))
+
+fit41 <- knn(matriz_casos, matriz_teste, classe_casos, k = k_vizinho, prob = TRUE)
+
+# Criando a Matriz de Confusão manualmente
+prev <- fit41
+prev <- as.factor(prev)
+vp <- if_else(valida$Sobreviveu == 1 & prev == 1, 1, 0)  
+fn <- if_else(valida$Sobreviveu == 1 & prev == 0, 1, 0)
+fp <- if_else(valida$Sobreviveu == 0 & prev == 1, 1, 0)
+vn <- if_else(valida$Sobreviveu == 0 & prev == 0, 1, 0)
+m_conf <- rbind(cbind(sum(vn),sum(fn)),cbind(sum(fp),sum(vp)))
+rownames(m_conf) <- c('Previsto Negativo','Previsto Positivo')
+colnames(m_conf) <- c('Real Negativo','Real Positivo')
+matriz_confusao_1 <- m_conf
+
+# Obtendo a precisão do modelo: Precisao = VP / (VP + FP), 
+# que indica se o modelo é capaz de identificar os VP's errando pouco, ou seja, apontando falsos positivos.
+prc1 <- sum(vp) / (sum(vp) + sum(fp))
+
+# Obtendo a sensibilidade do modelo: Sensibilidade = VP / (VP + FN),
+# que indica se o modelo é capaz de identificar todos os VP's, deixando poucos sem identificar. 
+rec1 <- sum(vp) / (sum(vp) + sum(fn))
+
+# Obtendo a medida F1 Score
+f1score1 <- 2 * prc1 * rec1 / (prc1 + rec1)
+
+paste("Precisão: ", round(prc1 * 100, digits = 4),'%')
+paste("RECALL: ", round(rec1 * 100, digits = 4),'%')
+paste("F1 Score:", round(f1score1*100, digits = 6), "%")
+
+matriz_confusao_1
+
+```
+
+  Realmente produzimos uma melhora na capacidade de predição segundo a métrica F1 Score. Na tentativa de aprimorar a capacidade de predição, aumentamos o número de vizinhos, sendo que constatamos que a qualidade de predição segundo a métrica F1 Score não evoluiu. Portanto, optou-se por utilizar 50 vizinhos próximos com o primeiro ajuste.
+
+   
+#### 4.5 Random Forest   
+
+  Quinto técnica a ser testado será uma **Random Forest**, que na verdade não chega a ser uma técnica e sim uma evolução na técnica de **Árvore de Decisão**, utilizando várias árvores acopladas para se chegar em uma predição melhor.
+    
+  Carregando as bibliotecas necessárias para utilizar a técnica. Será utilizado duas bibliotecas, a **randomForest** que contém a função para gerar as árvores de decisão e a **caret** que contém as métricas que serão utilizadas para avaliar a qualidade do modelo.
+  
+```{r}
+
+# Obtendo o pacote com as funções de RandomForest
+library(randomForest)
+
+# Obtendo pacote com funções utilitárias de análise de classificação
+library(caret)
+
+```
+
+  Primeiro ajuste foi considerando somente as variáveis *Classe*, *Preço* e *Embarque*, pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+  
+```{r}
+
+# Ajustando o Data Set para todos os valores serem númericos
+# para funcionar melhor com as funções do pacote
+treino_exp <- treino %>% 
+  mutate(Num_Embarque = if_else(treino$Embarque == 'S', 1, if_else(treino$Embarque == 'C', 2, 3)))
+treino_exp <- treino_exp[,c(-3,-4,-5,-7,-8)]
+colnames(treino_exp) <- c('Sobreviveu','Classe','Preco','Embarque')
+
+# Ajustando considerando as variáveis Classe, Preço e Embarque somente, 
+# pois são as variáveis que possuem alguma relação com critérios sócio-econômicos dos passageiros.
+fit51 <- randomForest(Sobreviveu ~ Classe + Preco + Embarque + 1, data = treino_exp, proximity = TRUE)
+fit51
+
+par(fg = 'blue', bg = 'gray', lwd = 1.5, xpd = TRUE)
+plot(fit51, main = 'Random Forest - Primeiro Ajuste')
+
+par(fg = 'black', bg = 'gray', lwd = 1, xpd = TRUE)
+MDSplot(fit51, k = 2, fac = treino_exp$Sobreviveu, palette=c('red', 'blue'), pch=20)
+
+```
+
+  Avaliando o primeiro ajuste, obtivemos um **F1 Score** em torno de 50%. 
+  
+```{r}
+
+fit51$confusion
+m <- fit51$confusion
+# VP / (VP + FP)
+precisao <- m[2,2] / (m[2,2] + m[2,1])
+# VP / (VP + FN)
+recall <- m[2,2] / (m[2,2] + m[1,2])
+
+f1score <- 2 * precisao * recall / (precisao + recall)
+
+paste("Precisão:", precisao)
+paste("Sensibilidade (RECALL):", recall)
+paste("F1 Score:", f1score)
+
+```
+  
+  No segundo ajuste retirou-se a variável *Embarque*.
+
+```{r}
+
+# Retirou-se a variável Embarque.
+fit52 <- randomForest(Sobreviveu ~ Classe + Preco + 1, data = treino_exp, proximity = TRUE)
+fit52
+
+par(fg = 'blue', bg = 'gray', lwd = 1.5, xpd = TRUE)
+plot(fit52, main = 'Random Forest - Segundo Ajuste')
+
+par(fg = 'black', bg = 'gray', lwd = 1, xpd = TRUE)
+MDSplot(fit52, k = 2, fac = treino_exp$Sobreviveu, palette=c('red', 'blue'), pch=20)
+
+```
+  
+  Avaliando o segundo ajuste, o **F1 Score** se aproxima de 60%.
+  
+```{r}
+
+fit52$confusion
+m <- fit52$confusion
+# VP / (VP + FP)
+precisao <- m[2,2] / (m[2,2] + m[2,1])
+# VP / (VP + FN)
+recall <- m[2,2] / (m[2,2] + m[1,2])
+
+f1score <- 2 * precisao * recall / (precisao + recall)
+
+paste("Precisão:", precisao)
+paste("Sensibilidade (RECALL):", recall)
+paste("F1 Score:", f1score)
+
+```
+  
+  No terceiro ajuste foi mantido somente a variável *Classe* no modelo.
+
+```{r}
+
+# Foi mantido somente a variável Classe no modelo.
+fit53 <- randomForest(Sobreviveu ~ Classe + 1, data = treino_exp, proximity = TRUE)
+fit53
+
+par(fg = 'blue', bg = 'gray', lwd = 1.5, xpd = TRUE)
+plot(fit53, main = 'Random Forest - Terceiro Ajuste')
+
+par(fg = 'black', bg = 'gray', lwd = 1, xpd = TRUE)
+MDSplot(fit53, k = 2, fac = treino_exp$Sobreviveu, palette=c('red', 'blue'), pch=20)
+
+```
+
+  Avaliando o terceiro ajuste, verificamos que o **F1 Score** retorna para um valor em torno de 50%.
+  
+```{r}
+
+fit53$confusion
+m <- fit53$confusion
+# VP / (VP + FP)
+precisao <- m[2,2] / (m[2,2] + m[2,1])
+# VP / (VP + FN)
+recall <- m[2,2] / (m[2,2] + m[1,2])
+
+f1score <- 2 * precisao * recall / (precisao + recall)
+
+paste("Precisão:", precisao)
+paste("Sensibilidade (RECALL):", recall)
+paste("F1 Score:", f1score)
+
+```
+  
+  De acordo com uma avaliação na **F1 Score** e **Recall** dos três ajustes, optou-se pelo Segundo Ajuste pois produziu valores de métrica melhores.  
+  
+  **Validando o ajuste escolhido.**  
+
+  A **Matriz de Confusão** da validação mostra que o modelo é capaz de prever somente cerca de 50% das pessoas que sobreviveram segundo a métrica **Sensibilidade (RECALL)**.
+
+```{r}
+
+# Testando o modelo escolhido - Segundo modelo
+previsao5 <- predict(fit52, newdata = valida)
+prev <- as.factor(previsao5)
+
+# Obtendo a matriz de confusão e demais métricas de validação do pacote caret
+m_conf <- caret::confusionMatrix(data = prev, reference = valida$Sobreviveu, positive = '1', mode = "everything")
+
+# Precisão calculado através do pacote caret
+precisao <- caret::precision(data = prev, reference = valida$Sobreviveu, relevant = '1')
+
+# Recall calculado através do pacote caret
+recall <- caret::recall(data = prev, reference = valida$Sobreviveu, relevant = '1')
+
+paste("Precisão para RandomForest:", precisao)
+paste("Sensibilidade (RECALL) para RandomForest:", recall)
+
+f1score <- 2 * precisao * recall / (precisao + recall)
+paste("F1 Score:", f1score)
+
+m_conf
+
+```
+  
+   
+### 5. Conclusão
+  
+  Avaliando as quatro técnicas avaliadas, pois a **Análise de Discriminante** poderá ser utilizada nesse caso, verificamos que a **Regressão Logística** e a **Árvore de Decisão** simples obtiveram uma perfomance melhor, considerando a métrica escolhida para avaliação que foi a **Sensibilidade (Recall)**. 
+
+  Para a **Regressão Logística** obtivemos as seguintes métricas na validação do modelo.
+  
+```{r}
+
+paste("Precisão:", round(p_rl*100, digits = 6), "%")
+paste("Sensibilidade (RECALL):", round(r_rl*100, digits = 6), "%")
+paste("F1 Score:", round(f1_rl*100, digits = 6), "%")
+m_rl
+
+```
+  
+  Para a **Árvore de Decisão** obtivemos as seguintes métricas na valiação do modelo.
+  
+```{r}
+
+paste("Precisão:", round(p_ad*100, digits = 6), "%")
+paste("Sensibilidade (RECALL):", round(r_ad*100, digits = 6), "%")
+paste("F1 Score:", round(f1_ad*100, digits = 6), "%")
+m_ad
+
+```
+  
+  Com base nos resultados obtidos, qualquer um dos dois modelos poderia ser empregado para gerar a predição do modelo. Nesse caso, optaríamos pelo modelo de **Regressão Logística** por uma escolha pessoal.
+  
+
